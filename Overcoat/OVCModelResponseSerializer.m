@@ -30,7 +30,27 @@
 #import <CoreData/CoreData.h>
 #import <Mantle/Mantle.h>
 
-@interface OVCModelResponseSerializer ()
+@interface NSString (MyContainsString)
+
+- (BOOL)myContainsString:(NSString*)other;
+
+@end
+
+@implementation NSString (MyContainsString)
+
+- (BOOL)myContainsString:(NSString*)other {
+    NSRange range = [self rangeOfString:other];
+    return range.length != 0;
+}
+
+@end
+
+@interface OVCModelResponseSerializer () {
+    NSString *paramName;
+    NSUInteger paramValue;
+    NSArray *stringComp;
+    NSString *className;
+}
 
 @property (strong, nonatomic) OVCURLMatcher *URLMatcher;
 @property (strong, nonatomic) OVCURLMatcher *URLResponseClassMatcher;
@@ -49,18 +69,18 @@
                          errorModelClass:(Class)errorModelClass
 {
     NSParameterAssert([responseClass isSubclassOfClass:[OVCResponse class]]);
-    
+
     if (errorModelClass != Nil) {
         NSParameterAssert([errorModelClass isSubclassOfClass:[MTLModel class]]);
     }
-    
+
     OVCModelResponseSerializer *serializer = [self serializerWithReadingOptions:0];
     serializer.URLMatcher = URLMatcher;
     serializer.URLResponseClassMatcher = URLResponseClassMatcher;
     serializer.managedObjectContext = managedObjectContext;
     serializer.responseClass = responseClass;
     serializer.errorModelClass = errorModelClass;
-    
+
     return serializer;
 }
 
@@ -72,22 +92,22 @@
 {
     NSError *serializationError = nil;
     id JSONObject = [super responseObjectForResponse:response data:data error:&serializationError];
-    
+
     if (error) {
         *error = serializationError;
     }
-    
+
     if (serializationError && [serializationError code] != NSURLErrorBadServerResponse) {
         return nil;
     }
-    
+
     NSHTTPURLResponse *HTTPResponse = (NSHTTPURLResponse *)response;
     Class resultClass = Nil;
     Class responseClass = Nil;
-    
+
     if (!serializationError) {
         resultClass = [self.URLMatcher modelClassForURL:HTTPResponse.URL];
-        
+
         if (self.URLResponseClassMatcher) {
             responseClass = [self.URLResponseClassMatcher modelClassForURL:HTTPResponse.URL];
         }
@@ -99,30 +119,88 @@
         resultClass = self.errorModelClass;
         responseClass = self.responseClass;
     }
-    
+
+    paramName = nil;
+    paramValue = 0;
+    stringComp = nil;
+    className = [[resultClass description] copy];
+    if ([className isEqualToString:@"Speciality"]) {
+        paramName = @"";
+        paramValue = 0;
+        stringComp = [response.URL.absoluteString componentsSeparatedByString:@"?"];
+        if (stringComp.count>1) {
+            stringComp = [stringComp[1] componentsSeparatedByString:@"&"];
+            for (NSString *param in stringComp) {
+                if ([param myContainsString:@"clinic"]) {
+                    stringComp = [param componentsSeparatedByString:@"="];
+                    if (stringComp.count) {
+                        paramName = stringComp[0];
+                        paramValue = [stringComp[1] integerValue];
+
+                        NSMutableArray *arr = [@[] mutableCopy];
+                        for (NSDictionary *item in JSONObject) {
+                            NSMutableDictionary *dic = [item mutableCopy];
+                            [dic addEntriesFromDictionary:@{paramName:@(paramValue)}];
+                            [arr addObject:dic];
+                        }
+                        JSONObject = arr;
+                    }
+                }
+            }
+        }
+    }
+    if ([className isEqualToString:@"Clinic"]) {
+        paramName = @"";
+        paramValue = 0;
+        stringComp = [response.URL.absoluteString componentsSeparatedByString:@"?"];
+        if (stringComp.count>1) {
+            stringComp = [stringComp[1] componentsSeparatedByString:@"&"];
+            for (NSString *param in stringComp) {
+                if ([param myContainsString:@"speciality"]) {
+                    stringComp = [param componentsSeparatedByString:@"="];
+                    if (stringComp.count) {
+                        paramName = stringComp[0];
+                        paramValue = [stringComp[1] integerValue];
+
+                        NSMutableDictionary *resp = [JSONObject mutableCopy];
+                        NSMutableArray *arr = [@[] mutableCopy];
+                        for (NSDictionary *item in resp[@"results"]) {
+                            NSMutableDictionary *dic = [item mutableCopy];
+                            [dic addEntriesFromDictionary:@{paramName:@(paramValue)}];
+                            [arr addObject:dic];
+                        }
+                        [resp setObject:arr forKey:@"results"];
+                        JSONObject = resp;
+                    }
+                }
+            }
+        }
+    }
+
+
     OVCResponse *responseObject = [responseClass responseWithHTTPResponse:HTTPResponse
                                                                JSONObject:JSONObject
                                                               resultClass:resultClass];
-    
+
     if (self.managedObjectContext) {
         id result = nil;
-        
+
         if ([resultClass conformsToProtocol:@protocol(MTLManagedObjectSerializing)]) {
             result = responseObject.result;
         } else if ([resultClass conformsToProtocol:@protocol(OVCManagedObjectSerializingContainer)]) {
             NSString *keyPath = [resultClass managedObjectSerializingKeyPath];
             result = [responseObject.result valueForKeyPath:keyPath];
         }
-        
+
         if (result) {
             [self saveResult:result];
         }
     }
-        
+
     if (serializationError && error) {
         *error = [serializationError ovc_errorWithUnderlyingResponse:responseObject];
     }
-    
+
     return responseObject;
 }
 
@@ -130,7 +208,7 @@
 
 - (void)saveResult:(id)result {
     NSParameterAssert(result);
-    
+
     NSArray *models = [result isKindOfClass:[NSArray class]] ? result : @[result];
     for (MTLModel<MTLManagedObjectSerializing> *model in models) {
         NSError *error = nil;
@@ -139,9 +217,9 @@
                                                   error:&error];
         NSAssert(error == nil, @"%@ saveResult failed with error: %@", self, error);
     }
-    
+
     NSManagedObjectContext *context = self.managedObjectContext;
-    
+
     [context performBlockAndWait:^{
         if ([context hasChanges]) {
             NSError *error = nil;
